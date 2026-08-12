@@ -61,10 +61,9 @@ def list_mcp_tools(
             )
             continue
         if is_stdio_provider and via_api_key:
-            # This route spawns a body-supplied command straight away, so it is
-            # server-side code execution outside the sandbox: same rule as
-            # routes/mcp_servers.py, an sk-unsloth key is not an interactive
-            # user. Per-provider so http providers in the batch still list.
+            # Spawns a body-supplied command outright, so it takes the rule from
+            # routes/mcp_servers.py: an sk-unsloth key is not an interactive user.
+            # Per-provider so http providers in the batch still list.
             command = str(provider_payload.get("command", ""))
             args = provider_payload.get("args")
             argv = [command] + [str(value) for value in (args if isinstance(args, list) else [])]

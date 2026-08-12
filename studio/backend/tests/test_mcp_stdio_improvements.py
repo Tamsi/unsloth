@@ -227,17 +227,15 @@ def test_data_recipe_builds_stdio_when_enabled(monkeypatch):
 
 
 # ── Data Recipe /mcp/tools requires a UI session for stdio ──────────
-# This route spawns a body-supplied command outright, with no storage round
-# trip, so it takes the same credential rule as routes/mcp_servers.py: an
-# sk-unsloth API key is a remote, long-lived credential, not an interactive
-# user. Stubs stand in for the Unsloth-only data_designer plugin so the check
-# is exercised on any host.
+# Spawns a body-supplied command with no storage round trip, so it takes the
+# same rule as routes/mcp_servers.py: an sk-unsloth key is not an interactive
+# user. Stubbed so the check runs without the Unsloth-only data_designer plugin.
 
 
 @pytest.fixture
 def _stub_data_designer(monkeypatch):
     """Minimal data_designer.engine.mcp.io so list_mcp_tools gets past its
-    ImportError early-return without the real plugin installed."""
+    ImportError early-return."""
     import sys
     import types
 
@@ -265,7 +263,7 @@ def test_data_recipe_mcp_tools_stdio_rejected_for_api_key(monkeypatch, _stub_dat
     )
     assert len(result.providers) == 1
     assert "UI session" in (result.providers[0].error or "")
-    # Never reached the builder, so no provider was constructed or spawned.
+    # Never reached the builder, so nothing was constructed or spawned.
     assert built == []
 
 

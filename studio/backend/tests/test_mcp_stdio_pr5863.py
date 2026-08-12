@@ -579,8 +579,7 @@ def test_stdio_env_passed_through(tmp_path, monkeypatch, transport):
 
 # ── 8. stdio management requires an interactive UI session ──────────
 #
-# The loopback bind auto-enables stdio (section 3b), which is the local user's
-# own machine and stays that way. What the gate cannot tell apart on its own is
+# The loopback bind auto-enables stdio (section 3b), but that says nothing about
 # WHICH credential is calling: get_current_subject accepts a long-lived,
 # exportable sk-unsloth API key as readily as the UI's session JWT, and a stdio
 # address is a local command. So the command paths take an interactive session,
@@ -654,8 +653,8 @@ def test_update_stdio_row_rejected_for_api_key_even_on_rename(tmp_path, monkeypa
     _reset_db(tmp_path, monkeypatch)
     _enable(monkeypatch)
     mcp_servers_db.create_server(id = "stdio1", display_name = "FS", url = "npx server")
-    # No url in the payload: the guard must still key off the stored address,
-    # else an API key could re-enable the row or rewrite its subprocess env.
+    # No url in the payload: the guard must still key off the stored address, else
+    # an API key could re-enable the row or rewrite its subprocess env.
     with pytest.raises(HTTPException) as exc:
         asyncio.run(
             routes_mcp.update_mcp_server(
@@ -693,8 +692,7 @@ def test_import_stdio_entry_errors_without_failing_the_batch(tmp_path, monkeypat
 
 
 def test_stdio_disabled_host_still_400_not_403(tmp_path, monkeypatch):
-    """Ordering guard: _validate_url runs first, so a 403 never reveals whether
-    stdio is enabled on this host."""
+    """Ordering guard: _validate_url runs first, so a 403 never leaks the gate state."""
     import asyncio
 
     from models.mcp_servers import McpServerTestRequest
@@ -727,8 +725,7 @@ def test_delete_stdio_allowed_for_api_key(tmp_path, monkeypatch, transport):
 
 
 def test_http_management_still_open_to_api_keys(tmp_path, monkeypatch, transport):
-    """No regression for programmatic callers: an http(s) MCP server is data,
-    not code, so every route still accepts an API key for it."""
+    """An http(s) MCP server is data, not code, so every route still takes an API key."""
     import asyncio
 
     from models.mcp_servers import McpServerCreate, McpServerTestRequest, McpServerUpdate
@@ -772,9 +769,8 @@ def test_http_management_still_open_to_api_keys(tmp_path, monkeypatch, transport
 
 
 def test_stdio_audit_log_holds_no_secrets(tmp_path, monkeypatch, transport, capsys):
-    """The audit line names the executable and a digest, never argv or env --
-    a stdio command routinely carries credentials in both. (structlog renders to
-    stdout here, so read capsys rather than caplog.)"""
+    """The audit line names the executable and a digest, never argv or env, which
+    routinely carry credentials. (structlog renders to stdout, so read capsys.)"""
     import asyncio
 
     from models.mcp_servers import McpServerCreate

@@ -108,20 +108,16 @@ def _guard_stdio(
     """Keep stdio commands behind an interactive UI session.
 
     A stdio address is a local command, so registering or probing one is
-    server-side code execution as the backend user, outside the tool sandbox. An
-    sk-unsloth API key is the remote, long-lived, exportable credential (README:
-    "anyone with the link and API key can use it"), and no shipped client manages
-    MCP servers with one -- the dialog always sends a session JWT. http(s)
-    servers are data rather than code, so they stay open to API keys.
-
-    Call this AFTER _validate_url so a host with stdio disabled keeps answering
-    400 rather than 403, which would leak whether the gate is open.
+    server-side code execution outside the tool sandbox. An sk-unsloth API key is
+    remote, long-lived and exportable, and no shipped client manages MCP servers
+    with one (the dialog always sends a session JWT); http(s) servers are data,
+    not code, so they stay open to API keys. Call AFTER _validate_url so a host
+    with stdio disabled still answers 400, not a 403 that leaks the gate state.
     """
     if not is_stdio(url):
         return
     require_ui_session(via_api_key)
-    # stdio_log_id, never the raw address: argv can carry credentials. The env
-    # (headers_json for a stdio row) is left out of the record entirely.
+    # Never the raw address: argv can carry credentials; env (headers_json) is omitted.
     logger.info(
         "mcp_servers.stdio_command",
         action = action,
@@ -229,9 +225,8 @@ async def update_mcp_server(
     changes = _changes_from_payload(payload)
     if not changes:
         raise HTTPException(status_code = 400, detail = "No fields to update")
-    # Guard the resulting address, falling back to the stored one: editing a
-    # stdio row is privileged even when the payload carries no url, since it can
-    # re-enable the row or rewrite the env the subprocess is handed.
+    # Guard the resulting address, falling back to the stored one: a url-less edit
+    # is still privileged, it can re-enable the row or rewrite the subprocess env.
     _guard_stdio(changes.get("url", old["url"]), via_api_key, action = "update", server_id = server_id)
     # headers == HTTP headers (remote) or env vars (stdio). On a transport-type
     # switch with no new headers, drop the old ones so env secrets aren't
@@ -344,8 +339,8 @@ async def import_mcp_servers(
     for entry in entries:
         try:
             url = _validate_url(entry.url)
-            # Per-entry like the stdio gate above it, so an API-key caller's
-            # http entries still import instead of the whole batch 403-ing.
+            # Per-entry so an API-key caller's http entries still import
+            # instead of the whole batch 403-ing.
             _guard_stdio(url, via_api_key, action = "import")
         except HTTPException as exc:
             errors.append(f"{entry.display_name}: {exc.detail}")
