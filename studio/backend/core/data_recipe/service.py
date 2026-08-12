@@ -173,7 +173,13 @@ def recipe_has_stdio_mcp(recipe: dict[str, Any]) -> bool:
     the request body has to apply the same UI-session rule as the MCP server
     routes. Shared so /mcp/tools, /validate and /jobs cannot drift apart.
     """
-    for provider in recipe.get("mcp_providers", []) or []:
+    providers = recipe.get("mcp_providers")
+    if not isinstance(providers, list):
+        # A recipe is an arbitrary dict, so this may be any JSON value. Anything
+        # that is not a list carries no stdio provider, and must not raise here:
+        # this runs before the route's own validation and would 500 on it.
+        return False
+    for provider in providers:
         if isinstance(provider, dict) and provider.get("provider_type") == "stdio":
             return True
     return False

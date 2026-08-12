@@ -138,18 +138,12 @@ def _normalize_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
     return out or None
 
 
-def _row_to_response(row: dict, *, redact_stdio_env: bool = False) -> McpServerResponse:
-    # For a stdio row `headers` is the subprocess env, which routinely holds
-    # tokens. An API key may not register one, so it may not read one back
-    # either; the UI session that created it still sees the values.
-    headers = parse_server_headers(row) or {}
-    if redact_stdio_env and is_stdio(row["url"]):
-        headers = {}
+def _row_to_response(row: dict) -> McpServerResponse:
     return McpServerResponse(
         id = row["id"],
         display_name = row["display_name"],
         url = row["url"],
-        headers = headers,
+        headers = parse_server_headers(row) or {},
         is_enabled = bool(row["is_enabled"]),
         use_oauth = bool(row.get("use_oauth")),
         created_at = row["created_at"],
@@ -162,9 +156,15 @@ async def list_mcp_servers(
     current_subject: str = Depends(get_current_subject),
     via_api_key: bool = Depends(authenticated_via_api_key),
 ):
-    return [
-        _row_to_response(row, redact_stdio_env = via_api_key) for row in mcp_servers_db.list_servers()
-    ]
+    rows = mcp_servers_db.list_servers()
+    if via_api_key:
+        # A stdio row is a local command. Both of its fields carry secrets --
+        # `url` is the argv (`server --token sk-...`) and `headers` is the
+        # subprocess env -- so a key that may not register one does not get to
+        # read one back. Drop the whole row rather than blanking fields: a
+        # redacted url would round-trip back into update as a bogus command.
+        rows = [row for row in rows if not is_stdio(row["url"])]
+    return [_row_to_response(row) for row in rows]
 
 
 @router.post("/", response_model = McpServerResponse, status_code = 201)

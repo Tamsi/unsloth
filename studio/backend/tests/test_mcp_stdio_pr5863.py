@@ -800,9 +800,9 @@ def test_stdio_audit_log_holds_no_secrets(tmp_path, monkeypatch, transport, caps
 # ── 9. the paths that could sidestep section 8 ──────────────────────
 
 
-def test_list_redacts_stdio_env_for_api_key(tmp_path, monkeypatch):
-    """For a stdio row `headers` is the subprocess env. A key that may not
-    register one may not read one back either."""
+def test_list_hides_stdio_rows_from_api_keys(tmp_path, monkeypatch):
+    """Both fields of a stdio row carry secrets: `url` is the argv and `headers`
+    is the subprocess env. A key that may not register one may not read one back."""
     import asyncio
 
     import routes.mcp_servers as routes_mcp
@@ -812,7 +812,7 @@ def test_list_redacts_stdio_env_for_api_key(tmp_path, monkeypatch):
     mcp_servers_db.create_server(
         id = "stdio1",
         display_name = "FS",
-        url = "npx server",
+        url = "npx server --token sk-argv-secret",
         headers_json = '{"API_KEY": "sk-env-secret"}',
     )
     mcp_servers_db.create_server(
@@ -822,20 +822,26 @@ def test_list_redacts_stdio_env_for_api_key(tmp_path, monkeypatch):
         headers_json = '{"Authorization": "Bearer t"}',
     )
 
-    by_id = {
-        row.id: row
-        for row in asyncio.run(routes_mcp.list_mcp_servers(current_subject = "u", via_api_key = True))
-    }
-    assert by_id["stdio1"].headers == {}
-    # An http row's headers are HTTP headers, not a local env, and an API key can
-    # already create and read those, so they are untouched.
-    assert by_id["http1"].headers == {"Authorization": "Bearer t"}
+    keyed = asyncio.run(
+        routes_mcp.list_mcp_servers(current_subject = "u", via_api_key = True)
+    )
+    # The http row is unchanged: its headers are HTTP headers an API key can
+    # already create and read.
+    assert [row.id for row in keyed] == ["http1"]
+    assert keyed[0].headers == {"Authorization": "Bearer t"}
+    serialized = repr([row.model_dump() for row in keyed])
+    assert "sk-argv-secret" not in serialized
+    assert "sk-env-secret" not in serialized
 
     ui = {
         row.id: row
-        for row in asyncio.run(routes_mcp.list_mcp_servers(current_subject = "u", via_api_key = False))
+        for row in asyncio.run(
+            routes_mcp.list_mcp_servers(current_subject = "u", via_api_key = False)
+        )
     }
+    assert set(ui) == {"stdio1", "http1"}
     assert ui["stdio1"].headers == {"API_KEY": "sk-env-secret"}
+    assert ui["stdio1"].url == "npx server --token sk-argv-secret"
 
 
 def test_update_stdio_row_to_http_rejected_for_api_key(tmp_path, monkeypatch):
@@ -871,6 +877,10 @@ def test_recipe_has_stdio_mcp():
     assert recipe_has_stdio_mcp({}) is False
     # Malformed entries must not crash the guard.
     assert recipe_has_stdio_mcp({"mcp_providers": ["nope", None]}) is False
+    # A non-list collection must return False, not raise: this runs before the
+    # route's own validation, so a TypeError here would be a 500.
+    for bad in [1, "stdio", {"a": 1}, None]:
+        assert recipe_has_stdio_mcp({"mcp_providers": bad}) is False
 
 
 def test_data_recipe_validate_rejects_stdio_for_api_key():
