@@ -166,6 +166,19 @@ def _validate_recipe_runtime_support(recipe: dict[str, Any], model_providers: li
         raise ValueError("Add a Provider connection block before running this recipe.")
 
 
+def recipe_has_stdio_mcp(recipe: dict[str, Any]) -> bool:
+    """Whether a recipe carries a stdio MCP provider, i.e. a local command.
+
+    Building one spawns a subprocess, so every route that accepts a recipe from
+    the request body has to apply the same UI-session rule as the MCP server
+    routes. Shared so /mcp/tools, /validate and /jobs cannot drift apart.
+    """
+    for provider in recipe.get("mcp_providers", []) or []:
+        if isinstance(provider, dict) and provider.get("provider_type") == "stdio":
+            return True
+    return False
+
+
 def build_mcp_providers(recipe: dict[str, Any]) -> list:
     from data_designer.config.mcp import LocalStdioMCPProvider, MCPProvider  # pyright: ignore[reportMissingImports]
 

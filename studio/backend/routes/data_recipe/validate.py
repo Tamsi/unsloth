@@ -7,13 +7,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from auth.authentication import authenticated_via_api_key
 from core.data_recipe.service import (
     build_config_builder,
     create_data_designer,
+    recipe_has_stdio_mcp,
     validate_recipe,
 )
+from routes.provider_credentials import require_ui_session
 from loggers import get_logger
 from models.data_recipe import RecipePayload, ValidateError, ValidateResponse
 from utils.utils import safe_error_detail, safe_curated_detail, log_and_http_error
@@ -132,8 +135,16 @@ def _patch_local_providers(recipe: dict[str, Any]) -> None:
 
 
 @router.post("/validate", response_model = ValidateResponse)
-def validate(payload: RecipePayload) -> ValidateResponse:
+def validate(
+    payload: RecipePayload,
+    via_api_key: bool = Depends(authenticated_via_api_key),
+) -> ValidateResponse:
     recipe = payload.recipe
+    # Validation discovers a provider's tools, which starts a stdio command, so
+    # it needs the same UI session as /mcp/tools. mcp_server.py calls this
+    # function directly, bypassing Depends, and passes via_api_key itself.
+    if recipe_has_stdio_mcp(recipe):
+        require_ui_session(via_api_key)
     if not recipe.get("columns"):
         return ValidateResponse(
             valid = False,

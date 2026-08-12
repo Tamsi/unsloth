@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from auth.authentication import get_current_credential
+from auth.authentication import authenticated_via_api_key, get_current_credential
 from auth.storage import CredentialRotated
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
@@ -22,6 +22,8 @@ from core.data_recipe.huggingface import (
     publish_recipe_dataset,
 )
 from core.data_recipe.jobs import get_job_manager
+from core.data_recipe.service import recipe_has_stdio_mcp
+from routes.provider_credentials import require_ui_session
 from loggers import get_logger
 from models.data_recipe import (
     JobCreateResponse,
@@ -387,8 +389,14 @@ def create_job(
     payload: RecipePayload,
     request: Request,
     credential: tuple = Depends(get_current_credential),
+    via_api_key: bool = Depends(authenticated_via_api_key),
 ):
     recipe = payload.recipe
+    # The worker builds the recipe's providers, so a stdio one starts a local
+    # command: same UI-session rule as /mcp/tools and /validate. Checked before
+    # _inject_local_providers so a rejected request mints no internal key.
+    if recipe_has_stdio_mcp(recipe):
+        require_ui_session(via_api_key)
     if not recipe.get("columns"):
         raise HTTPException(status_code = 400, detail = "Recipe must include columns.")
 

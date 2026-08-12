@@ -170,7 +170,11 @@ def create_studio_mcp() -> FastMCP:
         from models.data_recipe import RecipePayload
         from routes.data_recipe.validate import validate
 
-        return _dump(validate(RecipePayload(recipe = recipe)))
+        # Direct call, so FastAPI dependencies never run. This surface is a
+        # remote static-bearer one, never an interactive UI session, so it is
+        # not allowed to validate a recipe carrying a stdio (local command)
+        # provider.
+        return _dump(validate(RecipePayload(recipe = recipe), via_api_key = True))
 
     @mcp.tool
     def get_recipe_job_status(job_id: str) -> dict[str, Any]:

@@ -138,12 +138,18 @@ def _normalize_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
     return out or None
 
 
-def _row_to_response(row: dict) -> McpServerResponse:
+def _row_to_response(row: dict, *, redact_stdio_env: bool = False) -> McpServerResponse:
+    # For a stdio row `headers` is the subprocess env, which routinely holds
+    # tokens. An API key may not register one, so it may not read one back
+    # either; the UI session that created it still sees the values.
+    headers = parse_server_headers(row) or {}
+    if redact_stdio_env and is_stdio(row["url"]):
+        headers = {}
     return McpServerResponse(
         id = row["id"],
         display_name = row["display_name"],
         url = row["url"],
-        headers = parse_server_headers(row) or {},
+        headers = headers,
         is_enabled = bool(row["is_enabled"]),
         use_oauth = bool(row.get("use_oauth")),
         created_at = row["created_at"],
@@ -152,8 +158,14 @@ def _row_to_response(row: dict) -> McpServerResponse:
 
 
 @router.get("/", response_model = list[McpServerResponse])
-async def list_mcp_servers(current_subject: str = Depends(get_current_subject)):
-    return [_row_to_response(row) for row in mcp_servers_db.list_servers()]
+async def list_mcp_servers(
+    current_subject: str = Depends(get_current_subject),
+    via_api_key: bool = Depends(authenticated_via_api_key),
+):
+    return [
+        _row_to_response(row, redact_stdio_env = via_api_key)
+        for row in mcp_servers_db.list_servers()
+    ]
 
 
 @router.post("/", response_model = McpServerResponse, status_code = 201)
@@ -225,9 +237,12 @@ async def update_mcp_server(
     changes = _changes_from_payload(payload)
     if not changes:
         raise HTTPException(status_code = 400, detail = "No fields to update")
-    # Guard the resulting address, falling back to the stored one: a url-less edit
-    # is still privileged, it can re-enable the row or rewrite the subprocess env.
-    _guard_stdio(changes.get("url", old["url"]), via_api_key, action = "update", server_id = server_id)
+    # Guard if EITHER the stored row or the resulting address is stdio. A url-less
+    # edit can re-enable the row or rewrite the subprocess env, and repointing a
+    # stdio row at http would let a remote key take over a UI-registered server's
+    # id and tool namespace.
+    stdio_url = old["url"] if is_stdio(old["url"]) else changes.get("url", old["url"])
+    _guard_stdio(stdio_url, via_api_key, action = "update", server_id = server_id)
     # headers == HTTP headers (remote) or env vars (stdio). On a transport-type
     # switch with no new headers, drop the old ones so env secrets aren't
     # re-sent as HTTP headers (or vice versa).

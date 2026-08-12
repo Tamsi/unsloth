@@ -795,3 +795,121 @@ def test_stdio_audit_log_holds_no_secrets(tmp_path, monkeypatch, transport, caps
     assert "sk-env-secret" not in rendered
     assert "--token" not in rendered
     assert mcp_client.stdio_log_id("npx -y server --token sk-secret") in rendered
+
+
+# ── 9. the paths that could sidestep section 8 ──────────────────────
+
+
+def test_list_redacts_stdio_env_for_api_key(tmp_path, monkeypatch):
+    """For a stdio row `headers` is the subprocess env. A key that may not
+    register one may not read one back either."""
+    import asyncio
+
+    import routes.mcp_servers as routes_mcp
+
+    _reset_db(tmp_path, monkeypatch)
+    _enable(monkeypatch)
+    mcp_servers_db.create_server(
+        id = "stdio1",
+        display_name = "FS",
+        url = "npx server",
+        headers_json = '{"API_KEY": "sk-env-secret"}',
+    )
+    mcp_servers_db.create_server(
+        id = "http1",
+        display_name = "R",
+        url = "https://example.com/mcp",
+        headers_json = '{"Authorization": "Bearer t"}',
+    )
+
+    by_id = {
+        row.id: row
+        for row in asyncio.run(
+            routes_mcp.list_mcp_servers(current_subject = "u", via_api_key = True)
+        )
+    }
+    assert by_id["stdio1"].headers == {}
+    # An http row's headers are HTTP headers, not a local env, and an API key can
+    # already create and read those, so they are untouched.
+    assert by_id["http1"].headers == {"Authorization": "Bearer t"}
+
+    ui = {
+        row.id: row
+        for row in asyncio.run(
+            routes_mcp.list_mcp_servers(current_subject = "u", via_api_key = False)
+        )
+    }
+    assert ui["stdio1"].headers == {"API_KEY": "sk-env-secret"}
+
+
+def test_update_stdio_row_to_http_rejected_for_api_key(tmp_path, monkeypatch):
+    """Repointing a stdio row at http must not slip past the guard: it would let
+    a remote key take over a UI-registered server's id and tool namespace."""
+    import asyncio
+
+    from models.mcp_servers import McpServerUpdate
+    import routes.mcp_servers as routes_mcp
+
+    _reset_db(tmp_path, monkeypatch)
+    _enable(monkeypatch)
+    mcp_servers_db.create_server(id = "stdio1", display_name = "FS", url = "npx server")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            routes_mcp.update_mcp_server(
+                "stdio1",
+                McpServerUpdate(url = "https://attacker.example/mcp"),
+                current_subject = "u",
+                via_api_key = True,
+            )
+        )
+    assert exc.value.status_code == 403
+    assert mcp_servers_db.get_server("stdio1")["url"] == "npx server"
+
+
+def test_recipe_has_stdio_mcp():
+    from core.data_recipe.service import recipe_has_stdio_mcp
+
+    assert recipe_has_stdio_mcp({"mcp_providers": [{"provider_type": "stdio"}]}) is True
+    assert recipe_has_stdio_mcp({"mcp_providers": [{"provider_type": "http"}]}) is False
+    assert recipe_has_stdio_mcp({"mcp_providers": []}) is False
+    assert recipe_has_stdio_mcp({}) is False
+    # Malformed entries must not crash the guard.
+    assert recipe_has_stdio_mcp({"mcp_providers": ["nope", None]}) is False
+
+
+def test_data_recipe_validate_rejects_stdio_for_api_key():
+    """/validate builds the recipe's providers, the same spawn path as
+    /mcp/tools, so it takes the same rule."""
+    from models.data_recipe import RecipePayload
+    from routes.data_recipe.validate import validate
+
+    payload = RecipePayload(
+        recipe = {"mcp_providers": [{"provider_type": "stdio", "command": "npx"}]}
+    )
+    with pytest.raises(HTTPException) as exc:
+        validate(payload, via_api_key = True)
+    assert exc.value.status_code == 403
+
+
+def test_data_recipe_jobs_rejects_stdio_for_api_key():
+    from models.data_recipe import RecipePayload
+    from routes.data_recipe.jobs import create_job
+
+    payload = RecipePayload(
+        recipe = {"mcp_providers": [{"provider_type": "stdio", "command": "npx"}]}
+    )
+    with pytest.raises(HTTPException) as exc:
+        create_job(payload, request = None, credential = ("u", None), via_api_key = True)
+    assert exc.value.status_code == 403
+
+
+def test_mcp_server_tool_surface_refuses_stdio_recipes():
+    """mcp_server.py calls validate() directly, so FastAPI deps never run. It
+    must hand in via_api_key itself, or the /mcp bearer surface would be an
+    ungated route to a local spawn."""
+    import inspect
+
+    import mcp_server
+
+    src = inspect.getsource(mcp_server)
+    assert "validate(RecipePayload(recipe = recipe), via_api_key = True)" in src
