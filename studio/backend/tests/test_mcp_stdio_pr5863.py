@@ -448,11 +448,11 @@ def test_create_route_gate(tmp_path, monkeypatch, transport):
 
     _disable(monkeypatch)
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(routes_mcp.create_mcp_server(payload, current_subject = "u"))
+        asyncio.run(routes_mcp.create_mcp_server(payload, current_subject = "u", via_api_key = False))
     assert exc.value.status_code == 400
 
     _enable(monkeypatch)
-    resp = asyncio.run(routes_mcp.create_mcp_server(payload, current_subject = "u"))
+    resp = asyncio.run(routes_mcp.create_mcp_server(payload, current_subject = "u", via_api_key = False))
     assert resp.url == "npx -y server /tmp"
 
 
@@ -469,7 +469,7 @@ def test_update_http_to_stdio_blocked_when_off(tmp_path, monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(
             routes_mcp.update_mcp_server(
-                "s1", McpServerUpdate(url = "npx server"), current_subject = "u"
+                "s1", McpServerUpdate(url = "npx server"), current_subject = "u", via_api_key = False
             )
         )
     assert exc.value.status_code == 400
@@ -486,12 +486,12 @@ def test_test_route_gate(tmp_path, monkeypatch, transport):
 
     _disable(monkeypatch)
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(routes_mcp.test_mcp_server(req, current_subject = "u"))
+        asyncio.run(routes_mcp.test_mcp_server(req, current_subject = "u", via_api_key = False))
     assert exc.value.status_code == 400
     assert transport == []  # transport never opened
 
     _enable(monkeypatch)
-    res = asyncio.run(routes_mcp.test_mcp_server(req, current_subject = "u"))
+    res = asyncio.run(routes_mcp.test_mcp_server(req, current_subject = "u", via_api_key = False))
     assert res.ok and res.tool_count == 2
     assert len(transport) == 1
 
@@ -507,12 +507,12 @@ def test_refresh_route_gate(tmp_path, monkeypatch, transport):
 
     _disable(monkeypatch)
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(routes_mcp.refresh_mcp_server_tools("stdio1", current_subject = "u"))
+        asyncio.run(routes_mcp.refresh_mcp_server_tools("stdio1", current_subject = "u", via_api_key = False))
     assert exc.value.status_code == 400
     assert transport == []
 
     _enable(monkeypatch)
-    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("stdio1", current_subject = "u"))
+    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("stdio1", current_subject = "u", via_api_key = False))
     assert res.ok and res.tool_count == 2
     assert len(transport) == 1
 
@@ -569,3 +569,231 @@ def test_stdio_env_passed_through(tmp_path, monkeypatch, transport):
     )
     execute_tool("mcp__stdio1__list_directory", {})
     assert transport[-1]["headers"] == {"API_KEY": "sk-test"}
+
+
+# ── 8. stdio management requires an interactive UI session ──────────
+#
+# The loopback bind auto-enables stdio (section 3b), which is the local user's
+# own machine and stays that way. What the gate cannot tell apart on its own is
+# WHICH credential is calling: get_current_subject accepts a long-lived,
+# exportable sk-unsloth API key as readily as the UI's session JWT, and a stdio
+# address is a local command. So the command paths take an interactive session,
+# while http(s) MCP management stays open to API keys.
+
+
+def test_create_stdio_rejected_for_api_key(tmp_path, monkeypatch, transport):
+    import asyncio
+
+    from models.mcp_servers import McpServerCreate
+    import routes.mcp_servers as routes_mcp
+
+    _reset_db(tmp_path, monkeypatch)
+    _enable(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            routes_mcp.create_mcp_server(
+                McpServerCreate(display_name = "FS", url = "npx -y server /tmp"),
+                current_subject = "u",
+                via_api_key = True,
+            )
+        )
+    assert exc.value.status_code == 403
+    assert mcp_servers_db.list_servers() == []
+    assert transport == []
+
+
+def test_test_route_stdio_rejected_for_api_key_without_spawning(tmp_path, monkeypatch, transport):
+    import asyncio
+
+    from models.mcp_servers import McpServerTestRequest
+    import routes.mcp_servers as routes_mcp
+
+    _reset_db(tmp_path, monkeypatch)
+    _enable(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            routes_mcp.test_mcp_server(
+                McpServerTestRequest(url = "/bin/sh -c id"),
+                current_subject = "u",
+                via_api_key = True,
+            )
+        )
+    assert exc.value.status_code == 403
+    # The whole point: the probe never opened the transport.
+    assert transport == []
+
+
+def test_refresh_stdio_rejected_for_api_key(tmp_path, monkeypatch, transport):
+    import asyncio
+
+    import routes.mcp_servers as routes_mcp
+
+    _reset_db(tmp_path, monkeypatch)
+    _enable(monkeypatch)
+    mcp_servers_db.create_server(id = "stdio1", display_name = "FS", url = "npx server")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            routes_mcp.refresh_mcp_server_tools(
+                "stdio1", current_subject = "u", via_api_key = True
+            )
+        )
+    assert exc.value.status_code == 403
+    assert transport == []
+
+
+def test_update_stdio_row_rejected_for_api_key_even_on_rename(tmp_path, monkeypatch):
+    import asyncio
+
+    from models.mcp_servers import McpServerUpdate
+    import routes.mcp_servers as routes_mcp
+
+    _reset_db(tmp_path, monkeypatch)
+    _enable(monkeypatch)
+    mcp_servers_db.create_server(id = "stdio1", display_name = "FS", url = "npx server")
+    # No url in the payload: the guard must still key off the stored address,
+    # else an API key could re-enable the row or rewrite its subprocess env.
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            routes_mcp.update_mcp_server(
+                "stdio1",
+                McpServerUpdate(display_name = "renamed"),
+                current_subject = "u",
+                via_api_key = True,
+            )
+        )
+    assert exc.value.status_code == 403
+    assert mcp_servers_db.get_server("stdio1")["display_name"] == "FS"
+
+
+def test_import_stdio_entry_errors_without_failing_the_batch(tmp_path, monkeypatch):
+    import asyncio
+
+    from models.mcp_servers import McpServerImportRequest
+    import routes.mcp_servers as routes_mcp
+
+    _reset_db(tmp_path, monkeypatch)
+    _enable(monkeypatch)
+    config = {
+        "mcpServers": {
+            "remote": {"url": "https://example.com/mcp"},
+            "fs": {"command": "npx", "args": ["-y", "server", "/tmp"]},
+        }
+    }
+    result = asyncio.run(
+        routes_mcp.import_mcp_servers(
+            McpServerImportRequest(config = config), current_subject = "u", via_api_key = True
+        )
+    )
+    assert [row.display_name for row in result.created] == ["remote"]
+    assert any("fs" in err and "UI session" in err for err in result.errors)
+
+
+def test_stdio_disabled_host_still_400_not_403(tmp_path, monkeypatch):
+    """Ordering guard: _validate_url runs first, so a 403 never reveals whether
+    stdio is enabled on this host."""
+    import asyncio
+
+    from models.mcp_servers import McpServerTestRequest
+    import routes.mcp_servers as routes_mcp
+
+    _reset_db(tmp_path, monkeypatch)
+    _disable(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            routes_mcp.test_mcp_server(
+                McpServerTestRequest(url = "npx server"),
+                current_subject = "u",
+                via_api_key = True,
+            )
+        )
+    assert exc.value.status_code == 400
+
+
+def test_delete_stdio_allowed_for_api_key(tmp_path, monkeypatch, transport):
+    """Documents the carve-out: delete de-privileges, so it stays open."""
+    import asyncio
+
+    import routes.mcp_servers as routes_mcp
+
+    _reset_db(tmp_path, monkeypatch)
+    _enable(monkeypatch)
+    mcp_servers_db.create_server(id = "stdio1", display_name = "FS", url = "npx server")
+    asyncio.run(routes_mcp.delete_mcp_server("stdio1", current_subject = "u"))
+    assert mcp_servers_db.get_server("stdio1") is None
+
+
+def test_http_management_still_open_to_api_keys(tmp_path, monkeypatch, transport):
+    """No regression for programmatic callers: an http(s) MCP server is data,
+    not code, so every route still accepts an API key for it."""
+    import asyncio
+
+    from models.mcp_servers import McpServerCreate, McpServerTestRequest, McpServerUpdate
+    import routes.mcp_servers as routes_mcp
+
+    _reset_db(tmp_path, monkeypatch)
+    _enable(monkeypatch)
+
+    created = asyncio.run(
+        routes_mcp.create_mcp_server(
+            McpServerCreate(display_name = "R", url = "https://example.com/mcp"),
+            current_subject = "u",
+            via_api_key = True,
+        )
+    )
+    assert created.url == "https://example.com/mcp"
+
+    updated = asyncio.run(
+        routes_mcp.update_mcp_server(
+            created.id,
+            McpServerUpdate(display_name = "R2"),
+            current_subject = "u",
+            via_api_key = True,
+        )
+    )
+    assert updated.display_name == "R2"
+
+    probe = asyncio.run(
+        routes_mcp.test_mcp_server(
+            McpServerTestRequest(url = "https://example.com/mcp"),
+            current_subject = "u",
+            via_api_key = True,
+        )
+    )
+    assert probe.ok
+
+    refreshed = asyncio.run(
+        routes_mcp.refresh_mcp_server_tools(
+            created.id, current_subject = "u", via_api_key = True
+        )
+    )
+    assert refreshed.ok
+
+
+def test_stdio_audit_log_holds_no_secrets(tmp_path, monkeypatch, transport, capsys):
+    """The audit line names the executable and a digest, never argv or env --
+    a stdio command routinely carries credentials in both. (structlog renders to
+    stdout here, so read capsys rather than caplog.)"""
+    import asyncio
+
+    from models.mcp_servers import McpServerCreate
+    import routes.mcp_servers as routes_mcp
+
+    _reset_db(tmp_path, monkeypatch)
+    _enable(monkeypatch)
+    asyncio.run(
+        routes_mcp.create_mcp_server(
+            McpServerCreate(
+                display_name = "FS",
+                url = "npx -y server --token sk-secret",
+                headers = {"API_KEY": "sk-env-secret"},
+            ),
+            current_subject = "u",
+            via_api_key = False,
+        )
+    )
+    rendered = capsys.readouterr().out
+    assert "mcp_servers.stdio_command" in rendered
+    assert "sk-secret" not in rendered
+    assert "sk-env-secret" not in rendered
+    assert "--token" not in rendered
+    assert mcp_client.stdio_log_id("npx -y server --token sk-secret") in rendered

@@ -321,6 +321,7 @@ def test_update_server_clears_oauth_on_url_change(tmp_path, monkeypatch):
             "s1",
             McpServerUpdate(url = "https://new/mcp"),
             current_subject = "u",
+            via_api_key = False,
         )
     )
     assert calls == ["https://old/mcp"]
@@ -356,6 +357,7 @@ def test_update_server_clears_oauth_when_oauth_disabled(tmp_path, monkeypatch):
             "s1",
             McpServerUpdate(use_oauth = False),
             current_subject = "u",
+            via_api_key = False,
         )
     )
     assert calls == ["https://u/mcp"]
@@ -395,6 +397,7 @@ def test_test_endpoint_surfaces_url_validation_as_400(tmp_path, monkeypatch):
             test_mcp_server(
                 McpServerTestRequest(url = "ftp://nope"),
                 current_subject = "u",
+            via_api_key = False,
             )
         )
     assert exc.value.status_code == 400
@@ -749,7 +752,7 @@ def test_refresh_warms_tool_cache(tmp_path, monkeypatch):
         return _one_tool()
 
     monkeypatch.setattr(routes_mcp, "list_tools_async", fake_refresh)
-    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u"))
+    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u", via_api_key = False))
     assert res.ok and res.tool_count == 1
 
     def boom(*a, **k):
@@ -774,7 +777,7 @@ def test_update_url_evicts_tool_cache(tmp_path, monkeypatch):
 
     asyncio.run(
         routes_mcp.update_mcp_server(
-            "s1", McpServerUpdate(url = "https://new/mcp"), current_subject = "u"
+            "s1", McpServerUpdate(url = "https://new/mcp"), current_subject = "u", via_api_key = False
         )
     )
     assert mcp_client.get_cached_tools("s1") is None
@@ -794,7 +797,9 @@ def test_update_display_name_keeps_tool_cache(tmp_path, monkeypatch):
     mcp_servers_db.create_server(id = "s1", display_name = "A", url = "https://x/mcp", is_enabled = True)
 
     asyncio.run(
-        routes_mcp.update_mcp_server("s1", McpServerUpdate(display_name = "B"), current_subject = "u")
+        routes_mcp.update_mcp_server(
+            "s1", McpServerUpdate(display_name = "B"), current_subject = "u", via_api_key = False
+        )
     )
     assert mcp_client.get_cached_tools("s1") == cached
 
@@ -830,6 +835,7 @@ def test_update_rename_keeps_stdio_session(tmp_path, monkeypatch):
                 use_oauth = False,
             ),
             current_subject = "u",
+            via_api_key = False,
         )
     )
     assert closed == []
@@ -855,7 +861,7 @@ def test_update_stdio_command_change_closes_session(tmp_path, monkeypatch):
     )
     asyncio.run(
         routes_mcp.update_mcp_server(
-            "s1", McpServerUpdate(url = "npx other-server"), current_subject = "u"
+            "s1", McpServerUpdate(url = "npx other-server"), current_subject = "u", via_api_key = False
         )
     )
     assert len(closed) == 1
@@ -874,7 +880,9 @@ def test_update_disable_evicts_tool_cache(tmp_path, monkeypatch):
     mcp_servers_db.create_server(id = "s1", display_name = "A", url = "https://x/mcp", is_enabled = True)
 
     asyncio.run(
-        routes_mcp.update_mcp_server("s1", McpServerUpdate(is_enabled = False), current_subject = "u")
+        routes_mcp.update_mcp_server(
+            "s1", McpServerUpdate(is_enabled = False), current_subject = "u", via_api_key = False
+        )
     )
     assert mcp_client.get_cached_tools("s1") is None
 
@@ -1010,6 +1018,7 @@ def test_update_headers_evicts_tool_cache(tmp_path, monkeypatch):
             "s1",
             McpServerUpdate(headers = {"Authorization": "Bearer new"}),
             current_subject = "u",
+            via_api_key = False,
         )
     )
     assert mcp_client.get_cached_tools("s1") is None
@@ -1197,7 +1206,7 @@ def test_refresh_failure_records_cooloff(tmp_path, monkeypatch):
         raise RuntimeError("down")
 
     monkeypatch.setattr(routes_mcp, "list_tools_async", boom)
-    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u"))
+    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u", via_api_key = False))
     assert res.ok is False
     assert mcp_client.in_failure_cooloff("s1")
 
@@ -1224,7 +1233,7 @@ def test_refresh_drops_result_when_config_changes_mid_probe(tmp_path, monkeypatc
         return _one_tool("stale")
 
     monkeypatch.setattr(routes_mcp, "list_tools_async", fake_refresh)
-    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u"))
+    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u", via_api_key = False))
     assert res.ok and res.tool_count == 1
     assert mcp_client.get_cached_tools("s1") is None
 
@@ -1252,7 +1261,7 @@ def test_refresh_failure_no_cooloff_when_config_changes_mid_probe(tmp_path, monk
         raise RuntimeError("old endpoint down")
 
     monkeypatch.setattr(routes_mcp, "list_tools_async", boom)
-    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u"))
+    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u", via_api_key = False))
     assert res.ok is False
     assert not mcp_client.in_failure_cooloff("s1")
 

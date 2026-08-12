@@ -120,7 +120,7 @@ def join_stdio_command(parts: list[str]) -> str:
     return shlex.join(parts)
 
 
-def _stdio_log_id(url: str) -> str:
+def stdio_log_id(url: str) -> str:
     """A non-secret label for logs. stdio commands can embed credentials in argv
     (e.g. ``npx server --token sk-...``), so never log the raw command; use the
     executable basename plus a short digest of the full command instead."""
@@ -487,7 +487,7 @@ class _StdioSession:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "MCP stdio session close failed for %s: %s",
-                    _stdio_log_id(getattr(self, "url", "")),
+                    stdio_log_id(getattr(self, "url", "")),
                     exc,
                 )
             try:
@@ -655,7 +655,7 @@ def _get_stdio_session(
                         ).start()
                         atexit.register(close_stdio_sessions)
             for victim in evicted:
-                logger.info("Evicting LRU idle stdio MCP session: %s", _stdio_log_id(victim.url))
+                logger.info("Evicting LRU idle stdio MCP session: %s", stdio_log_id(victim.url))
                 victim.close()
             if closed_while_connecting:
                 session.close()
@@ -774,7 +774,7 @@ def _reap_idle_stdio_sessions(now: Optional[float] = None) -> None:
         for key in expired:
             _discard_stdio_key_lock(key)
     for session in sessions:
-        logger.info("Closing idle stdio MCP session: %s", _stdio_log_id(session.url))
+        logger.info("Closing idle stdio MCP session: %s", stdio_log_id(session.url))
         session.close()
 
 

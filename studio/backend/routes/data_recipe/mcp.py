@@ -7,8 +7,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from auth.authentication import authenticated_via_api_key
 from core.data_recipe.service import build_mcp_providers
 from loggers import get_logger
 from models.data_recipe import (
@@ -23,7 +24,10 @@ router = APIRouter()
 
 
 @router.post("/mcp/tools", response_model = McpToolsListResponse)
-def list_mcp_tools(payload: McpToolsListRequest) -> McpToolsListResponse:
+def list_mcp_tools(
+    payload: McpToolsListRequest,
+    via_api_key: bool = Depends(authenticated_via_api_key),
+) -> McpToolsListResponse:
     try:
         from data_designer.engine.mcp import io as mcp_io
     except ImportError as exc:
@@ -44,15 +48,36 @@ def list_mcp_tools(payload: McpToolsListRequest) -> McpToolsListResponse:
     providers: list[McpToolsProviderResult] = []
     tool_to_providers: dict[str, list[str]] = defaultdict(list)
 
-    from core.inference.mcp_client import stdio_mcp_enabled
+    from core.inference.mcp_client import join_stdio_command, stdio_log_id, stdio_mcp_enabled
 
     for provider_payload in payload.mcp_providers:
         provider_name = str(provider_payload.get("name", "")).strip()
-        if provider_payload.get("provider_type") == "stdio" and not stdio_mcp_enabled():
+        is_stdio_provider = provider_payload.get("provider_type") == "stdio"
+        if is_stdio_provider and not stdio_mcp_enabled():
             providers.append(
                 McpToolsProviderResult(
                     name = provider_name,
                     error = "Local (stdio) MCP servers are disabled on this host.",
+                )
+            )
+            continue
+        if is_stdio_provider and via_api_key:
+            # This route spawns a body-supplied command straight away, so it is
+            # server-side code execution outside the sandbox: same rule as
+            # routes/mcp_servers.py, an sk-unsloth key is not an interactive
+            # user. Per-provider so http providers in the batch still list.
+            command = str(provider_payload.get("command", ""))
+            args = provider_payload.get("args")
+            argv = [command] + [str(value) for value in (args if isinstance(args, list) else [])]
+            logger.warning(
+                "data_recipe.mcp.stdio_requires_ui_session",
+                # Redacted: argv and env can carry credentials.
+                command = stdio_log_id(join_stdio_command(argv)),
+            )
+            providers.append(
+                McpToolsProviderResult(
+                    name = provider_name,
+                    error = "Local (stdio) MCP servers require a UI session.",
                 )
             )
             continue

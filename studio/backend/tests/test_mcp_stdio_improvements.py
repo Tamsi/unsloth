@@ -64,6 +64,7 @@ def test_create_forces_oauth_off_for_stdio(tmp_path, monkeypatch):
         routes_mcp.create_mcp_server(
             McpServerCreate(display_name = "FS", url = "npx -y server /tmp", use_oauth = True),
             current_subject = "u",
+            via_api_key = False,
         )
     )
     assert resp.use_oauth is False
@@ -80,6 +81,7 @@ def test_create_keeps_oauth_for_http(tmp_path, monkeypatch):
         routes_mcp.create_mcp_server(
             McpServerCreate(display_name = "GH", url = "https://gh/mcp", use_oauth = True),
             current_subject = "u",
+            via_api_key = False,
         )
     )
     assert resp.use_oauth is True
@@ -96,7 +98,7 @@ def test_update_url_to_stdio_clears_oauth(tmp_path, monkeypatch):
     mcp_servers_db.create_server(id = "s1", display_name = "A", url = "https://a/mcp", use_oauth = True)
     resp = asyncio.run(
         routes_mcp.update_mcp_server(
-            "s1", McpServerUpdate(url = "npx -y server /tmp"), current_subject = "u"
+            "s1", McpServerUpdate(url = "npx -y server /tmp"), current_subject = "u", via_api_key = False
         )
     )
     assert resp.use_oauth is False
@@ -119,7 +121,7 @@ def test_switch_stdio_to_http_drops_env(tmp_path, monkeypatch):
     )
     resp = asyncio.run(
         routes_mcp.update_mcp_server(
-            "s1", McpServerUpdate(url = "https://remote/mcp"), current_subject = "u"
+            "s1", McpServerUpdate(url = "https://remote/mcp"), current_subject = "u", via_api_key = False
         )
     )
     # stdio env must NOT survive as HTTP headers on the remote endpoint
@@ -144,6 +146,7 @@ def test_switch_keeps_explicitly_supplied_headers(tmp_path, monkeypatch):
             "s1",
             McpServerUpdate(url = "https://remote/mcp", headers = {"Authorization": "Bearer new"}),
             current_subject = "u",
+            via_api_key = False,
         )
     )
     assert resp.headers == {"Authorization": "Bearer new"}
@@ -163,7 +166,9 @@ def test_same_transport_edit_keeps_headers(tmp_path, monkeypatch):
     )
     # editing only the display name (still stdio) must keep env vars
     resp = asyncio.run(
-        routes_mcp.update_mcp_server("s1", McpServerUpdate(display_name = "B"), current_subject = "u")
+        routes_mcp.update_mcp_server(
+            "s1", McpServerUpdate(display_name = "B"), current_subject = "u", via_api_key = False
+        )
     )
     assert resp.headers == {"API_KEY": "secret"}
 
@@ -219,3 +224,68 @@ def test_data_recipe_builds_stdio_when_enabled(monkeypatch):
 
     built = build_mcp_providers(_STDIO_RECIPE)
     assert len(built) == 1  # constructed (not spawned) only when enabled
+
+
+# ── Data Recipe /mcp/tools requires a UI session for stdio ──────────
+# This route spawns a body-supplied command outright, with no storage round
+# trip, so it takes the same credential rule as routes/mcp_servers.py: an
+# sk-unsloth API key is a remote, long-lived credential, not an interactive
+# user. Stubs stand in for the Unsloth-only data_designer plugin so the check
+# is exercised on any host.
+
+
+@pytest.fixture
+def _stub_data_designer(monkeypatch):
+    """Minimal data_designer.engine.mcp.io so list_mcp_tools gets past its
+    ImportError early-return without the real plugin installed."""
+    import sys
+    import types
+
+    for name in ("data_designer", "data_designer.engine", "data_designer.engine.mcp"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    io_mod = types.ModuleType("data_designer.engine.mcp.io")
+    io_mod.list_tools = lambda provider, timeout_sec = None: []
+    monkeypatch.setitem(sys.modules, "data_designer.engine.mcp.io", io_mod)
+    return io_mod
+
+
+def test_data_recipe_mcp_tools_stdio_rejected_for_api_key(monkeypatch, _stub_data_designer):
+    import routes.data_recipe.mcp as recipe_mcp
+    from models.data_recipe import McpToolsListRequest
+
+    _enable(monkeypatch)
+    built = []
+    monkeypatch.setattr(
+        recipe_mcp, "build_mcp_providers", lambda recipe: built.append(recipe) or []
+    )
+
+    result = recipe_mcp.list_mcp_tools(
+        McpToolsListRequest(mcp_providers = _STDIO_RECIPE["mcp_providers"]),
+        via_api_key = True,
+    )
+    assert len(result.providers) == 1
+    assert "UI session" in (result.providers[0].error or "")
+    # Never reached the builder, so no provider was constructed or spawned.
+    assert built == []
+
+
+def test_data_recipe_mcp_tools_stdio_allowed_for_ui_session(monkeypatch, _stub_data_designer):
+    import routes.data_recipe.mcp as recipe_mcp
+    from models.data_recipe import McpToolsListRequest
+
+    _enable(monkeypatch)
+    built = []
+
+    class _Provider:
+        name = "fs"
+
+    monkeypatch.setattr(
+        recipe_mcp, "build_mcp_providers", lambda recipe: built.append(recipe) or [_Provider()]
+    )
+
+    result = recipe_mcp.list_mcp_tools(
+        McpToolsListRequest(mcp_providers = _STDIO_RECIPE["mcp_providers"]),
+        via_api_key = False,
+    )
+    assert result.providers[0].error is None
+    assert len(built) == 1

@@ -296,7 +296,9 @@ def test_import_route_creates_and_dedups(tmp_path, monkeypatch):
         }
     }
     res = asyncio.run(
-        routes_mcp.import_mcp_servers(McpServerImportRequest(config = cfg), current_subject = "u")
+        routes_mcp.import_mcp_servers(
+            McpServerImportRequest(config = cfg), current_subject = "u", via_api_key = False
+        )
     )
     assert res.errors == []
     assert res.skipped == []
@@ -312,7 +314,9 @@ def test_import_route_creates_and_dedups(tmp_path, monkeypatch):
 
     # Re-importing the same config skips both by url.
     res2 = asyncio.run(
-        routes_mcp.import_mcp_servers(McpServerImportRequest(config = cfg), current_subject = "u")
+        routes_mcp.import_mcp_servers(
+            McpServerImportRequest(config = cfg), current_subject = "u", via_api_key = False
+        )
     )
     assert res2.created == []
     assert set(res2.skipped) == {"fs", "remote", "oauth", "disabled"}
@@ -333,7 +337,9 @@ def test_import_route_gates_stdio_when_disabled(tmp_path, monkeypatch):
         }
     }
     res = asyncio.run(
-        routes_mcp.import_mcp_servers(McpServerImportRequest(config = cfg), current_subject = "u")
+        routes_mcp.import_mcp_servers(
+            McpServerImportRequest(config = cfg), current_subject = "u", via_api_key = False
+        )
     )
     # Remote still imports; the stdio entry is rejected per-entry (gate off).
     assert {c.display_name for c in res.created} == {"remote"}

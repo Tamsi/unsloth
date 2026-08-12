@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
-from auth.authentication import get_current_subject
+from auth.authentication import authenticated_via_api_key, get_current_subject
 from core.inference.mcp_client import (
     TOOL_CACHE_INVALIDATING_FIELDS,
     cache_tools,
@@ -22,6 +22,7 @@ from core.inference.mcp_client import (
     parse_stdio_command,
     probe_timeout,
     record_probe_failure,
+    stdio_log_id,
     stdio_mcp_enabled,
 )
 from core.inference.mcp_config_import import parse_mcp_config
@@ -34,6 +35,7 @@ from models.mcp_servers import (
     McpServerTestRequest,
     McpServerUpdate,
 )
+from routes.provider_credentials import require_ui_session
 from storage import mcp_servers_db
 from utils.utils import safe_curated_detail, log_and_http_error
 
@@ -96,6 +98,38 @@ def _validate_url(url: str) -> str:
     return trimmed
 
 
+def _guard_stdio(
+    url: str,
+    via_api_key: bool,
+    *,
+    action: str,
+    server_id: str | None = None,
+) -> None:
+    """Keep stdio commands behind an interactive UI session.
+
+    A stdio address is a local command, so registering or probing one is
+    server-side code execution as the backend user, outside the tool sandbox. An
+    sk-unsloth API key is the remote, long-lived, exportable credential (README:
+    "anyone with the link and API key can use it"), and no shipped client manages
+    MCP servers with one -- the dialog always sends a session JWT. http(s)
+    servers are data rather than code, so they stay open to API keys.
+
+    Call this AFTER _validate_url so a host with stdio disabled keeps answering
+    400 rather than 403, which would leak whether the gate is open.
+    """
+    if not is_stdio(url):
+        return
+    require_ui_session(via_api_key)
+    # stdio_log_id, never the raw address: argv can carry credentials. The env
+    # (headers_json for a stdio row) is left out of the record entirely.
+    logger.info(
+        "mcp_servers.stdio_command",
+        action = action,
+        server_id = server_id,
+        command = stdio_log_id(url),
+    )
+
+
 def _normalize_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
     """Trim header names, drop empties, coerce values to str; None if empty."""
     if not headers:
@@ -128,12 +162,15 @@ async def list_mcp_servers(current_subject: str = Depends(get_current_subject)):
 
 @router.post("/", response_model = McpServerResponse, status_code = 201)
 async def create_mcp_server(
-    payload: McpServerCreate, current_subject: str = Depends(get_current_subject)
+    payload: McpServerCreate,
+    current_subject: str = Depends(get_current_subject),
+    via_api_key: bool = Depends(authenticated_via_api_key),
 ):
     display_name = (payload.display_name or "").strip()
     if not display_name:
         raise HTTPException(status_code = 400, detail = "display_name must not be empty")
     url = _validate_url(payload.url)
+    _guard_stdio(url, via_api_key, action = "create")
     headers = _normalize_headers(payload.headers)
     # OAuth is HTTP-only; force it off for stdio commands so a stale flag can't
     # push the probe onto the 305s OAuth timeout. Backend enforces this.
@@ -184,6 +221,7 @@ async def update_mcp_server(
     server_id: str,
     payload: McpServerUpdate,
     current_subject: str = Depends(get_current_subject),
+    via_api_key: bool = Depends(authenticated_via_api_key),
 ):
     old = mcp_servers_db.get_server(server_id)
     if not old:
@@ -191,6 +229,12 @@ async def update_mcp_server(
     changes = _changes_from_payload(payload)
     if not changes:
         raise HTTPException(status_code = 400, detail = "No fields to update")
+    # Guard the resulting address, falling back to the stored one: editing a
+    # stdio row is privileged even when the payload carries no url, since it can
+    # re-enable the row or rewrite the env the subprocess is handed.
+    _guard_stdio(
+        changes.get("url", old["url"]), via_api_key, action = "update", server_id = server_id
+    )
     # headers == HTTP headers (remote) or env vars (stdio). On a transport-type
     # switch with no new headers, drop the old ones so env secrets aren't
     # re-sent as HTTP headers (or vice versa).
@@ -234,7 +278,9 @@ async def delete_mcp_server(server_id: str, current_subject: str = Depends(get_c
 
 @router.post("/{server_id}/refresh", response_model = McpServerProbeResult)
 async def refresh_mcp_server_tools(
-    server_id: str, current_subject: str = Depends(get_current_subject)
+    server_id: str,
+    current_subject: str = Depends(get_current_subject),
+    via_api_key: bool = Depends(authenticated_via_api_key),
 ):
     server = mcp_servers_db.get_server(server_id)
     if not server:
@@ -243,6 +289,7 @@ async def refresh_mcp_server_tools(
     # stdio row from a desktop DB must not spawn on a hosted/network host.
     if is_stdio(server["url"]) and not stdio_mcp_enabled():
         raise HTTPException(status_code = 400, detail = "stdio MCP servers are disabled on this host")
+    _guard_stdio(server["url"], via_api_key, action = "refresh", server_id = server_id)
 
     use_oauth = bool(server.get("use_oauth"))
     try:
@@ -281,7 +328,9 @@ async def refresh_mcp_server_tools(
 
 @router.post("/import", response_model = McpServerImportResult)
 async def import_mcp_servers(
-    payload: McpServerImportRequest, current_subject: str = Depends(get_current_subject)
+    payload: McpServerImportRequest,
+    current_subject: str = Depends(get_current_subject),
+    via_api_key: bool = Depends(authenticated_via_api_key),
 ):
     """Bulk-register servers from a standard mcpServers JSON config (issue
     #5936). Each entry rides the existing create path: _validate_url applies
@@ -297,6 +346,9 @@ async def import_mcp_servers(
     for entry in entries:
         try:
             url = _validate_url(entry.url)
+            # Per-entry like the stdio gate above it, so an API-key caller's
+            # http entries still import instead of the whole batch 403-ing.
+            _guard_stdio(url, via_api_key, action = "import")
         except HTTPException as exc:
             errors.append(f"{entry.display_name}: {exc.detail}")
             continue
@@ -321,12 +373,16 @@ async def import_mcp_servers(
 
 @router.post("/test", response_model = McpServerProbeResult)
 async def test_mcp_server(
-    payload: McpServerTestRequest, current_subject: str = Depends(get_current_subject)
+    payload: McpServerTestRequest,
+    current_subject: str = Depends(get_current_subject),
+    via_api_key: bool = Depends(authenticated_via_api_key),
 ):
     # URL/header validation must surface as 400 like create/update so the
     # frontend's create-form pre-flight gets the same error semantics as the
     # save call. Only catch transport/timeout errors below.
     url = _validate_url(payload.url)
+    # Before the probe: this route spawns the command without storing anything.
+    _guard_stdio(url, via_api_key, action = "test")
     headers = _normalize_headers(payload.headers)
     try:
         tools = await list_tools_async(
