@@ -824,9 +824,7 @@ def test_list_redacts_stdio_env_for_api_key(tmp_path, monkeypatch):
 
     by_id = {
         row.id: row
-        for row in asyncio.run(
-            routes_mcp.list_mcp_servers(current_subject = "u", via_api_key = True)
-        )
+        for row in asyncio.run(routes_mcp.list_mcp_servers(current_subject = "u", via_api_key = True))
     }
     assert by_id["stdio1"].headers == {}
     # An http row's headers are HTTP headers, not a local env, and an API key can
@@ -835,9 +833,7 @@ def test_list_redacts_stdio_env_for_api_key(tmp_path, monkeypatch):
 
     ui = {
         row.id: row
-        for row in asyncio.run(
-            routes_mcp.list_mcp_servers(current_subject = "u", via_api_key = False)
-        )
+        for row in asyncio.run(routes_mcp.list_mcp_servers(current_subject = "u", via_api_key = False))
     }
     assert ui["stdio1"].headers == {"API_KEY": "sk-env-secret"}
 

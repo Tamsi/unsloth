@@ -163,8 +163,7 @@ async def list_mcp_servers(
     via_api_key: bool = Depends(authenticated_via_api_key),
 ):
     return [
-        _row_to_response(row, redact_stdio_env = via_api_key)
-        for row in mcp_servers_db.list_servers()
+        _row_to_response(row, redact_stdio_env = via_api_key) for row in mcp_servers_db.list_servers()
     ]
 
 

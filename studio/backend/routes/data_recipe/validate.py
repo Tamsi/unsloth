@@ -136,8 +136,7 @@ def _patch_local_providers(recipe: dict[str, Any]) -> None:
 
 @router.post("/validate", response_model = ValidateResponse)
 def validate(
-    payload: RecipePayload,
-    via_api_key: bool = Depends(authenticated_via_api_key),
+    payload: RecipePayload, via_api_key: bool = Depends(authenticated_via_api_key)
 ) -> ValidateResponse:
     recipe = payload.recipe
     # Validation discovers a provider's tools, which starts a stdio command, so
