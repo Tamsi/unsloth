@@ -25,8 +25,7 @@ router = APIRouter()
 
 @router.post("/mcp/tools", response_model = McpToolsListResponse)
 def list_mcp_tools(
-    payload: McpToolsListRequest,
-    via_api_key: bool = Depends(authenticated_via_api_key),
+    payload: McpToolsListRequest, via_api_key: bool = Depends(authenticated_via_api_key)
 ) -> McpToolsListResponse:
     try:
         from data_designer.engine.mcp import io as mcp_io

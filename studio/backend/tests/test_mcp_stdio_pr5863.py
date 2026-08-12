@@ -452,7 +452,9 @@ def test_create_route_gate(tmp_path, monkeypatch, transport):
     assert exc.value.status_code == 400
 
     _enable(monkeypatch)
-    resp = asyncio.run(routes_mcp.create_mcp_server(payload, current_subject = "u", via_api_key = False))
+    resp = asyncio.run(
+        routes_mcp.create_mcp_server(payload, current_subject = "u", via_api_key = False)
+    )
     assert resp.url == "npx -y server /tmp"
 
 
@@ -507,12 +509,16 @@ def test_refresh_route_gate(tmp_path, monkeypatch, transport):
 
     _disable(monkeypatch)
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(routes_mcp.refresh_mcp_server_tools("stdio1", current_subject = "u", via_api_key = False))
+        asyncio.run(
+            routes_mcp.refresh_mcp_server_tools("stdio1", current_subject = "u", via_api_key = False)
+        )
     assert exc.value.status_code == 400
     assert transport == []
 
     _enable(monkeypatch)
-    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("stdio1", current_subject = "u", via_api_key = False))
+    res = asyncio.run(
+        routes_mcp.refresh_mcp_server_tools("stdio1", current_subject = "u", via_api_key = False)
+    )
     assert res.ok and res.tool_count == 2
     assert len(transport) == 1
 
@@ -633,9 +639,7 @@ def test_refresh_stdio_rejected_for_api_key(tmp_path, monkeypatch, transport):
     mcp_servers_db.create_server(id = "stdio1", display_name = "FS", url = "npx server")
     with pytest.raises(HTTPException) as exc:
         asyncio.run(
-            routes_mcp.refresh_mcp_server_tools(
-                "stdio1", current_subject = "u", via_api_key = True
-            )
+            routes_mcp.refresh_mcp_server_tools("stdio1", current_subject = "u", via_api_key = True)
         )
     assert exc.value.status_code == 403
     assert transport == []
@@ -762,9 +766,7 @@ def test_http_management_still_open_to_api_keys(tmp_path, monkeypatch, transport
     assert probe.ok
 
     refreshed = asyncio.run(
-        routes_mcp.refresh_mcp_server_tools(
-            created.id, current_subject = "u", via_api_key = True
-        )
+        routes_mcp.refresh_mcp_server_tools(created.id, current_subject = "u", via_api_key = True)
     )
     assert refreshed.ok
 

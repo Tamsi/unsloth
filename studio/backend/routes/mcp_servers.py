@@ -232,9 +232,7 @@ async def update_mcp_server(
     # Guard the resulting address, falling back to the stored one: editing a
     # stdio row is privileged even when the payload carries no url, since it can
     # re-enable the row or rewrite the env the subprocess is handed.
-    _guard_stdio(
-        changes.get("url", old["url"]), via_api_key, action = "update", server_id = server_id
-    )
+    _guard_stdio(changes.get("url", old["url"]), via_api_key, action = "update", server_id = server_id)
     # headers == HTTP headers (remote) or env vars (stdio). On a transport-type
     # switch with no new headers, drop the old ones so env secrets aren't
     # re-sent as HTTP headers (or vice versa).

@@ -397,7 +397,7 @@ def test_test_endpoint_surfaces_url_validation_as_400(tmp_path, monkeypatch):
             test_mcp_server(
                 McpServerTestRequest(url = "ftp://nope"),
                 current_subject = "u",
-            via_api_key = False,
+                via_api_key = False,
             )
         )
     assert exc.value.status_code == 400
@@ -752,7 +752,9 @@ def test_refresh_warms_tool_cache(tmp_path, monkeypatch):
         return _one_tool()
 
     monkeypatch.setattr(routes_mcp, "list_tools_async", fake_refresh)
-    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u", via_api_key = False))
+    res = asyncio.run(
+        routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u", via_api_key = False)
+    )
     assert res.ok and res.tool_count == 1
 
     def boom(*a, **k):
@@ -1206,7 +1208,9 @@ def test_refresh_failure_records_cooloff(tmp_path, monkeypatch):
         raise RuntimeError("down")
 
     monkeypatch.setattr(routes_mcp, "list_tools_async", boom)
-    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u", via_api_key = False))
+    res = asyncio.run(
+        routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u", via_api_key = False)
+    )
     assert res.ok is False
     assert mcp_client.in_failure_cooloff("s1")
 
@@ -1233,7 +1237,9 @@ def test_refresh_drops_result_when_config_changes_mid_probe(tmp_path, monkeypatc
         return _one_tool("stale")
 
     monkeypatch.setattr(routes_mcp, "list_tools_async", fake_refresh)
-    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u", via_api_key = False))
+    res = asyncio.run(
+        routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u", via_api_key = False)
+    )
     assert res.ok and res.tool_count == 1
     assert mcp_client.get_cached_tools("s1") is None
 
@@ -1261,7 +1267,9 @@ def test_refresh_failure_no_cooloff_when_config_changes_mid_probe(tmp_path, monk
         raise RuntimeError("old endpoint down")
 
     monkeypatch.setattr(routes_mcp, "list_tools_async", boom)
-    res = asyncio.run(routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u", via_api_key = False))
+    res = asyncio.run(
+        routes_mcp.refresh_mcp_server_tools("s1", current_subject = "u", via_api_key = False)
+    )
     assert res.ok is False
     assert not mcp_client.in_failure_cooloff("s1")
 
